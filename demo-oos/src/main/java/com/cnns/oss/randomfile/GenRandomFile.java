@@ -1,7 +1,9 @@
-package com.demos.oss.genfile;
+package com.cnns.oss.randomfile;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -36,7 +38,7 @@ public class GenRandomFile {
 		}
 	}
 	/**
-	 * 生成一个指定长度的,指定文本类型,指定字符集的文件,使用随机数字填充
+	 * 生成一个指定长度的,指定文本类型,指定字符集的文件,使用随机字符填充
 	 * @param config
 	 */
 	public static void genRandomFile(RandomFileConfig config){
@@ -120,6 +122,56 @@ public class GenRandomFile {
 			throw new RuntimeException("选择的参数有误");
 		}
 		return charList;
+	}
+	
+	
+	/**
+	 * 翻倍一个文件的大小
+	 * @param fileName
+	 */
+	public static void duplicateFile(String fileName) {
+		duplicateFile(new File(fileName));
+	}
+	public static void duplicateFile(File file) {
+		repeatFile(file,2);
+	}
+	/**
+	 * 用于对一个文件进行重复的方法,主要用了测试
+	 * 传入的次数应该从2开始,2代表翻倍
+	 * @param file
+	 * @param times
+	 */
+	public static void repeatFile(File file,int times) {
+		BufferedInputStream bis = null;
+		BufferedOutputStream bos = null;
+		
+		try {
+			bis = new BufferedInputStream(new FileInputStream(file));
+			byte[] buffer = new byte[bis.available()];
+			bis.read(buffer);
+			try {
+				bis.close();
+			}catch(IOException e) {
+				throw new RuntimeException(e);
+			}finally {
+				bis = null;
+			}
+			bos = new BufferedOutputStream(new FileOutputStream(file,true));
+			for(int i=2;i<times;i++) {
+				bos.write(buffer);
+			}
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}finally {
+			try {
+				bos.close();
+			} catch (IOException e) {
+				throw new RuntimeException(e);
+			}finally {
+				bos = null;
+			}
+		}
+		
 	}
 	
 	public static void main(String[] args) {

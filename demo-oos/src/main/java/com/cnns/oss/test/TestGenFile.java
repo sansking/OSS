@@ -1,12 +1,12 @@
-package com.demo.oss.test;
+package com.cnns.oss.test;
 
-import com.demos.oss.genfile.GenRandomFile;
-import com.demos.oss.genfile.Language;
-import com.demos.oss.genfile.RandomFileConfig;
-import com.demos.oss.genfile.RandomFileConfig.Unit;
+import java.io.File;
+
+import com.cnns.oss.randomfile.GenRandomFile;
 
 public class TestGenFile {
 	public static void main(String[] args) {
+		/*
 		RandomFileConfig config = new RandomFileConfig();
 		config.setFilePath("D:\\TestDir\\upfiles\\randomFile.txt");
 		config.setMinLength(10);
@@ -14,5 +14,8 @@ public class TestGenFile {
 		config.setUnit(Unit.MB);
 		config.setLang(Language.BOTH);
 		GenRandomFile.genRandomFile(config);
+		*/
+		GenRandomFile.repeatFile(
+				new File("D:\\TestDir\\upfiles\\randomFile.txt"),10);
 	}
 }

@@ -1,4 +1,4 @@
-package com.demos.oss.genfile;
+package com.cnns.oss.randomfile;
 
 /**
  * 该类用于对随机生成的文件进行一些配置
@@ -30,7 +30,7 @@ public class RandomFileConfig {
 	 * 判断一个FileConfig对象中,是否有重要的参数没有设置
 	 * @return
 	 */
-	public boolean isEmpty() {
+	public boolean isConfiged() {
 		if(minLength==null || maxLength==null || lang==null||filePath==null)
 			return false;
 		return true;
@@ -85,7 +85,6 @@ public class RandomFileConfig {
 	}
 	public RandomFileConfig() {
 		super();
-		// TODO Auto-generated constructor stub
 	}
 	@Override
 	public String toString() {

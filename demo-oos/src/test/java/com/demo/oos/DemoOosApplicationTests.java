@@ -9,7 +9,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.test.context.junit4.SpringRunner;
 
-import com.demo.oss.service.OSSService;
+import com.cnns.oss.service.OSSService;
 
 @RunWith(SpringRunner.class)
 @SpringBootTest

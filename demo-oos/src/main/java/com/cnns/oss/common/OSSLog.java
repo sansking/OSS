@@ -1,4 +1,4 @@
-package com.demo.oss.log;
+package com.cnns.oss.common;
 
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.Signature;
@@ -15,15 +15,14 @@ public class OSSLog {
 
 	Logger logger = LoggerFactory.getLogger(OSSLog.class);
 	
-	@Pointcut("execution(* com.demo.oss.service.*.upload*(..))")
+	@Pointcut("execution(* com.demo.oss.service.*.*(..))")
 	public void join() {
 	
 	}
 	
 	@Around("join()")
 	public void around(ProceedingJoinPoint point) {
-		System.err.println("aspect is effective");
-		
+		//通过signature得到目标方法的包.类.方法名
 		Signature signature = point.getSignature();
 		logger.info("执行目标方法开始:{}",signature);
 		try {

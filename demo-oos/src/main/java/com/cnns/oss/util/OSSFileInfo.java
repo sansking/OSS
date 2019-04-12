@@ -1,4 +1,4 @@
-package com.demo.oss.util;
+package com.cnns.oss.util;
 
 import java.io.File;
 

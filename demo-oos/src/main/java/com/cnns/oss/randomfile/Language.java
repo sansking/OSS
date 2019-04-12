@@ -1,4 +1,4 @@
-package com.demos.oss.genfile;
+package com.cnns.oss.randomfile;
 
 public enum Language{
 	CHINESE(1),ENGLISH(2),BOTH(0);
