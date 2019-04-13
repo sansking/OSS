@@ -1,8 +1,9 @@
-package com.cnns.oss.util;
+package com.cnns.oss.common.file;
 
 import java.io.File;
 
 import com.aliyun.oss.OSSClient;
+import com.cnns.oss.common.enumeration.FileOperation;
 
 /**
  * 用于保存文件上传下载基本信息的类

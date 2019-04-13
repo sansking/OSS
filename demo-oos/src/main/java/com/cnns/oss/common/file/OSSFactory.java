@@ -1,4 +1,4 @@
-package com.cnns.oss.util;
+package com.cnns.oss.common.file;
 
 import java.io.File;
 
@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.aliyun.oss.OSSClient;
+import com.cnns.oss.common.enumeration.FileOperation;
 /**
  * 该类用于提供动态或静态的OssClient
  * @author wangp
@@ -51,11 +52,9 @@ public class OSSFactory {
 	 * 提供返回静态的OSSClient的方法,为避免多次创建,使用synchronized锁定创建过程
 	 * @return
 	 */
-	public OSSClient getStaticOssClient() {
+	public synchronized OSSClient getStaticOssClient() {
 		if(staticOssClient==null) {
-			synchronized(OSSFactory.class) {
-				staticOssClient = new OSSClient(endpoint,accessKeyId,accessKeySecret);
-			}
+			staticOssClient = new OSSClient(endpoint,accessKeyId,accessKeySecret);
 		}
 		return staticOssClient;
 	}

@@ -15,11 +15,10 @@ public class OSSLog {
 
 	Logger logger = LoggerFactory.getLogger(OSSLog.class);
 	
-	@Pointcut("execution(* com.demo.oss.service.*.*(..))")
+	@Pointcut("execution(* com.cnns.oss.service.*.*(..))")
 	public void join() {
 	
 	}
-	
 	@Around("join()")
 	public void around(ProceedingJoinPoint point) {
 		//通过signature得到目标方法的包.类.方法名

@@ -1,6 +1,8 @@
 package com.cnns.oss.service;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -8,6 +10,7 @@ import java.util.concurrent.Executors;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -15,24 +18,30 @@ import org.springframework.stereotype.Service;
 import com.aliyun.oss.OSSClient;
 import com.aliyun.oss.model.OSSObjectSummary;
 import com.aliyun.oss.model.ObjectListing;
-import com.cnns.oss.util.FileExecutor;
-import com.cnns.oss.util.FileOperation;
-import com.cnns.oss.util.OSSFactory;
+import com.cnns.oss.common.enumeration.FileOperation;
+import com.cnns.oss.common.file.FileExecutor;
+import com.cnns.oss.common.file.OSSFactory;
+import com.cnns.oss.dao.RemoteDirMapper;
+import com.cnns.oss.dao.RemoteFileMapper;
+import com.cnns.oss.dao.dto.FileAble;
+import com.cnns.oss.dao.dto.RemoteDir;
+import com.cnns.oss.dao.dto.RemoteFile;
 
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 /**
  * 该类提供以下方法以供操作OSS服务器
- * 1.创建文件夹的方法
- * 2.上传单个文件到指定目录的方法
- * 3.下载单个文件到指定本地目录的方法
- * 4.批量下载文件的方法
- * 5.批量上传文件的方法
- * 6.关闭OSSClient的方法	//如果大量的线程被启用,导致某个OSSClient创建的
+ * 1.上传单个文件到指定目录的方法
+ * 2.下载单个文件到指定本地目录的方法
+ * 3.批量下载文件的方法
+ * 4.批量上传文件的方法
+ * 5.获取某个bucket上某个key的所有文件信息的方法
  * 
  *问题:
  *	1.批量下载时,可能造成大量的线程被启用,可能造成CPU负担过大
- *		//使用线程池改进
+ *	2.如果某个OSSClient对象创建了过多的连接,可能会出问题
+ *		//可以使用OSSClient对象池
+ *	等实际测试之后再考虑改进
  * @author wangp
  *
  */
@@ -52,6 +61,8 @@ public class OSSService {
 	
 	@Value("${aliyun.threadPoolNum}")
 	private int threadPoolNum;
+	
+	
 	
 	/**
 	 * 由于必须要构造函数加载后,才能进行自动注入;
@@ -141,5 +152,146 @@ public class OSSService {
 	}
 	
 	
+	/**
+	 * 得到key对应的远程文件夹的所有内容的摘要
+	 * @param bucketName
+	 * @param remotePrefix
+	 */
+	public List<OSSObjectSummary> getSummary(String bucketName,String remotePrefix) {
+
+		List<OSSObjectSummary> list = new ArrayList<>();
+		
+		ObjectListing listObjects = staticClient.listObjects(bucketName, remotePrefix);
+		List<OSSObjectSummary> objectSummaries = listObjects.getObjectSummaries();
+		for (OSSObjectSummary ossObjectSummary : objectSummaries) {
+			list.add(ossObjectSummary);
+		}
+		return list;
+		/*
+		for (OSSObjectSummary summary : objectSummaries) {
+			System.out.println("key:"+bucketName+"/"+summary.getKey());	//该文件在OSS上的路径
+			System.out.println("\tsize:"+summary.getSize());
+			System.out.println("\tmd5:"+summary.getETag());	//该文件的hash值
+			System.out.println("\tstorageClass:"+summary.getStorageClass());
+			System.out.println("\tlastModifiedTime:"+
+			sdf.format(summary.getLastModified()));
+			System.out.println("\towner:"+summary.getOwner());
+		}
+		*/
+	}
+	
+	@Autowired
+	private RemoteFileMapper remoteFileMapper;
+	@Autowired
+	private RemoteDirMapper remoteDirMapper;
+	
+	/**
+	 * 从远程服务器上得到文件信息之后,将文件信息插入到数据库中
+	 * @param list
+	 */
+	public void insertRemoteFiles(List<OSSObjectSummary> list) {
+		int flagNum = 0;	//由于文件数量可能非常多,为了避免过多的信息同时传到数据库,使用多线程的方式逐步插入
+		LinkedList<List<RemoteDir>> dirOuterList = new LinkedList<List<RemoteDir>>();
+		LinkedList<List<RemoteFile>> fileOuterList = new LinkedList<List<RemoteFile>>();
+		
+		Executor executor = Executors.newCachedThreadPool();
+		for (OSSObjectSummary summary : list) {
+			if(flagNum % 10000 ==0) {
+				List<RemoteDir> dirList = new ArrayList<RemoteDir>();
+				List<RemoteFile> fileList = new ArrayList<RemoteFile>();
+				dirOuterList.add(dirList);
+				fileOuterList.add(fileList);
+				
+				//每隔10000次,启用另一个线程把远程文件和文件夹插入数据库中
+				if(flagNum != 0) {
+					executeInsert(dirOuterList, fileOuterList, executor);
+				}
+			}
+			FileAble f = getFile(summary);
+			if(f instanceof RemoteDir) {
+				dirOuterList.getLast().add((RemoteDir)f);
+			}else if(f instanceof RemoteFile) {
+				fileOuterList.getLast().add((RemoteFile)f);
+			}
+			if(flagNum==list.size()-1 && flagNum %10000!=0) {
+				executeInsert(dirOuterList, fileOuterList, executor);
+			}
+			flagNum ++;
+			
+		}
+	}
+
+	
+	private final org.slf4j.Logger logger = LoggerFactory.getLogger(getClass());
+	/**
+	 * 将从OSS得到的文件摘要转换成数据库中的RemoteFile的方法
+	 * 如果在表中已存在相同内容,则直接放弃本次插入
+	 * 如果只有部分相等,则直接抛出一个异常
+	 */
+	private void executeInsert(LinkedList<List<RemoteDir>> dirOuterList, LinkedList<List<RemoteFile>> fileOuterList,
+			Executor executor) {
+		executor.execute(()->{
+			List<RemoteFile> innerFileList = fileOuterList.getLast();
+			List<RemoteDir> innerDirList = dirOuterList.getLast();
+			
+			logger.info("文件长度为:"+innerFileList.size());
+			logger.info("文件夹长度为:"+innerFileList.size());
+			
+			if(innerDirList.size()!=0) {
+				int exist = remoteDirMapper.isExist(innerDirList);
+				if(exist==0) {
+					remoteDirMapper.insertByBatch(innerDirList);
+				}else if(exist != innerDirList.size()) {
+					throw new RuntimeException("部分远程文件已存在与数据库中");
+				}else {
+					logger.warn("远程文件与数据库中的内容完全一样!");
+				}
+			}
+			
+			if(innerFileList.size()!=0) {
+				int exist = remoteFileMapper.isExist(innerFileList);
+				if(exist==0) {
+					remoteFileMapper.insertByBatch(innerFileList);
+				}else if(exist != innerFileList.size()) {
+					throw new RuntimeException("部分远程文件已存在与数据库中");
+				}else {
+					logger.warn("远程文件与数据库中的内容完全一样!");
+				}
+			}
+			
+		});
+	}
+	
+	/**
+	 * 把OSS服务的文件摘要转换成相关的文件/文件夹对象
+	 * @param summary
+	 * @return
+	 */
+	public FileAble getFile(OSSObjectSummary summary) {
+		String key = summary.getKey();
+		if(key.endsWith("/")) {
+			RemoteDir remoteDir = new RemoteDir();
+			remoteDir.setDirName(key);
+			remoteDir.setHash(summary.getETag());
+			remoteDir.setRank(key.split("/").length);
+			return remoteDir;
+		}else {
+			RemoteFile remoteFile = new RemoteFile();
+			remoteFile.setFileFullName(key);
+			if(key.contains("/"))
+				remoteFile.setFileName(key.substring(key.lastIndexOf("/"),key.length()));
+			else 
+				remoteFile.setFileName(key);
+			remoteFile.setSize(summary.getSize());
+			remoteFile.setLastModifyTime(summary.getLastModified());
+			return remoteFile;
+		}
+	}
+	
+	public void test(String bucketName,String key) {
+		List<OSSObjectSummary> list = getSummary(bucketName,key);
+		System.err.println(list);
+		insertRemoteFiles(list);
+	}
 	
 }

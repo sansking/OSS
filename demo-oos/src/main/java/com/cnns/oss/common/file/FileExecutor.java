@@ -1,4 +1,4 @@
-package com.cnns.oss.util;
+package com.cnns.oss.common.file;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
@@ -20,13 +20,17 @@ import com.aliyun.oss.model.DownloadFileResult;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.aliyun.oss.model.UploadFileRequest;
 import com.cnns.oss.common.DownloadListener;
+import com.cnns.oss.common.ThreadConfig;
 import com.cnns.oss.common.UploadListener;
+import com.cnns.oss.common.enumeration.FileOperation;
 
 public class FileExecutor implements Runnable{
 	
 	private static Logger logger = LoggerFactory.getLogger(FileExecutor.class);	//打印日志的logger对象
 	private OSSFileInfo  fileInfo;	//包含文件上传下载基本信息的类
 	private static SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+	
+	FileExecutor(){}
 	
 	//只允许本包下的FileExecutorUtils创建本对象,因此,将构造方法设为friendly
 	FileExecutor(OSSFileInfo fileInfo) {
@@ -41,6 +45,7 @@ public class FileExecutor implements Runnable{
 	 */
 	@Override
 	public void run() {
+		System.err.println("Before:当前线程数:"+Thread.activeCount());
 		switch(fileInfo.operation) {
 			case RESUMABLE_UPLOAD:
 				fileUpload();
@@ -51,6 +56,7 @@ public class FileExecutor implements Runnable{
 			default:
 				throw new RuntimeException("未知的上传下载选项,请参见:"+FileOperation.class);
 		}
+		System.err.println("After:当前线程数:"+Thread.activeCount());
 	}
 	
 	/**
@@ -75,7 +81,7 @@ public class FileExecutor implements Runnable{
 			uploadReqeust.setUploadFile(f.getAbsolutePath());
 			fileInfo.client.uploadFile(uploadReqeust);
 			double interval = (System.currentTimeMillis()-time)/1000.0;
-			logger.info("文件上传成功,耗时{}秒,当前时间{}",interval,sdf.format(new Date()));
+			logger.info("文件{}上传成功,耗时{}秒,当前时间{}",f.getAbsolutePath(),interval,sdf.format(new Date()));
 		} catch (Throwable e) {
 			throw new RuntimeException(e);
 		}finally {

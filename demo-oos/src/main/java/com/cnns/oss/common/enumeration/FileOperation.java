@@ -1,4 +1,4 @@
-package com.cnns.oss.util;
+package com.cnns.oss.common.enumeration;
 
 //用于标志上传下载的枚举类
 public enum FileOperation{
