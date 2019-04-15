@@ -241,10 +241,11 @@ public class OSSService {
 				int exist = remoteDirMapper.isExist(innerDirList);
 				if(exist==0) {
 					remoteDirMapper.insertByBatch(innerDirList);
+					logger.info("目录信息插入成功!");
 				}else if(exist != innerDirList.size()) {
-					throw new RuntimeException("部分远程文件已存在与数据库中");
+					throw new RuntimeException("部分远程目录已存在与数据库中");
 				}else {
-					logger.warn("远程文件与数据库中的内容完全一样!");
+					logger.warn("远程目录与数据库中的内容完全一样!");
 				}
 			}
 			
@@ -252,6 +253,7 @@ public class OSSService {
 				int exist = remoteFileMapper.isExist(innerFileList);
 				if(exist==0) {
 					remoteFileMapper.insertByBatch(innerFileList);
+					logger.info("文件信息插入成功!");
 				}else if(exist != innerFileList.size()) {
 					throw new RuntimeException("部分远程文件已存在与数据库中");
 				}else {
@@ -284,11 +286,12 @@ public class OSSService {
 				remoteFile.setFileName(key);
 			remoteFile.setSize(summary.getSize());
 			remoteFile.setLastModifyTime(summary.getLastModified());
+			remoteFile.setHash(summary.getETag());
 			return remoteFile;
 		}
 	}
 	
-	public void test(String bucketName,String key) {
+	public void insertSummaries(String bucketName,String key) {
 		List<OSSObjectSummary> list = getSummary(bucketName,key);
 		System.err.println(list);
 		insertRemoteFiles(list);
