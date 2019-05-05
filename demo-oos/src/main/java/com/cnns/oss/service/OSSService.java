@@ -2,10 +2,17 @@ package com.cnns.oss.service;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -16,8 +23,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.aliyun.oss.OSSClient;
+import com.aliyun.oss.model.ListObjectsRequest;
 import com.aliyun.oss.model.OSSObjectSummary;
 import com.aliyun.oss.model.ObjectListing;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.cnns.oss.common.GlobalCounter;
 import com.cnns.oss.common.enumeration.FileOperation;
 import com.cnns.oss.common.file.FileExecutor;
 import com.cnns.oss.common.file.OSSFactory;
@@ -49,7 +59,10 @@ import io.swagger.annotations.ApiOperation;
 @Api(value="oss service")
 public class OSSService {
 	
-	private static Executor executor;
+	//private static CompletionService<Map<String,Object>> completionService;
+	private static ExecutorService executor;
+	private static int totalTaskNum = 0;
+	private static List<Future<Map<String,Object>>> taskList = new ArrayList<>();
 	
 	//注入一个静态的factory以产生ossClient对象
 	private static OSSFactory ossFactory;
@@ -73,9 +86,11 @@ public class OSSService {
 		staticClient = ossFactory.getStaticOssClient();
 		if(threadPoolNum <= 1)
 			threadPoolNum=1;
-		if(threadPoolNum >= 50)
-			threadPoolNum = 50;	//为了避免线程数量超出限制,最大线程数设置为50
+		if(threadPoolNum > 100)
+			threadPoolNum = 100;	//为了避免线程数量超出限制,最大线程数设置为50
+		System.err.println("当前线程池数量为"+threadPoolNum);
 		executor = Executors.newFixedThreadPool(threadPoolNum);
+		//completionService = new ExecutorCompletionService<>(executor);
 	}
 	
 	/**
@@ -88,25 +103,107 @@ public class OSSService {
 	}
 	
 	
+	/**
+	 * 该方法的流程为:
+	 * 	1.通过参数下载或者上传文件
+	 *  2.将下载下来的文件信息保存在对应的数据库表中
+	 */
+	public void getFullInfo(String operation,String bucketName,String key,String localFile) {
+		if("upload".equals(operation)) {
+			uploadFile(bucketName,key,localFile);
+		}else if("download".equals(operation)) {
+			File f = new File(localFile);
+			if(f.isDirectory()) {
+				batchDownload(bucketName,key,f);
+			}else {
+				downLoadFile(bucketName,key,localFile);
+			}
+		}
+		executor.shutdown();
+		try {
+			executor.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+		
+		
+		/**
+		 * 注:此处的sleep会导致后续任务不执行,原因尚不明确
+		 *  可能的情况是: 由于当前线程池可用线程数量较少,
+		 *  	待执行任务过多,导致某些待执行任务在await方法之后执行
+		 */
+		/*
+		try {
+			Thread.sleep(30000);
+		} catch (InterruptedException e1) {
+			e1.printStackTrace();
+		}
+		*/
+		StringBuffer sb = new StringBuffer();
+		sb.append("全局计数:").append(GlobalCounter.count).append("\r\n")
+			.append("总任务数").append(taskList.size()).append("\r\n")
+			.append("全局计数1:").append(GlobalCounter.count1).append("\r\n")
+			.append("全局计数2:").append(GlobalCounter.count2);
+		logger.info(sb.toString());
+		
+		try {
+			for (Future<Map<String, Object>> future : taskList) {
+				if(future.isDone()) {
+					Map<String,Object> map = future.get(10,TimeUnit.SECONDS);
+					Date finishTime = new java.sql.Date(((Date)map.get("finishTime")).getTime());
+					
+					String remoteFileName = (String) map.get("key");
+					String local = (String) map.get("localFile");
+					String bucket = (String) map.get("bucketName");
+					QueryWrapper<RemoteFile> query = new QueryWrapper<RemoteFile>()
+							.eq(remoteFileName != null && !"".equals(remoteFileName), "file_full_name", remoteFileName)
+							.eq(bucket !=null && !"".equals(bucket),"bucket_name", bucket);
+					RemoteFile remoteFile = remoteFileMapper.selectOne(query);
+					logger.info("远程文件下载完成,远程文件信息为:"+remoteFile);
+					remoteFile.setDownloadState(2);
+					remoteFileMapper.updateById(remoteFile);
+					
+				}else {
+					System.err.println("任务未完成!");
+				}
+			}
+			
+		}catch(Exception e) {
+			throw new RuntimeException(e);
+		}
+		
+		
+	}
+	
+	
+	
 	//上传文件方法的重载,使用String形式的文件路径
 	public void uploadFile(String bucketName,String objectName,String upFile) {
 		uploadFile(bucketName,objectName,new File(upFile));
 	}
 	
 	@ApiOperation(value = "用于上传单个文件/文件夹的方法")
-	public void uploadFile(String bucketName,String objectName,File upFile) {
+	/**
+	 * 以上将upFile文件/文件夹,上传到 key 所在的文件夹中
+	 * 	如果是文件夹,请注意 key 需要以 / 结尾
+	 */
+	public void uploadFile(String bucketName,String key,File upFile) {
 		if(!upFile.exists())
 			throw new RuntimeException("要上传的文件不存在!请检查文件");
 		if(upFile.isDirectory()) {
 			String[] children = upFile.list();
 			for (String child : children) {
 				File childFile = new File(upFile,child);
-				objectName = objectName.endsWith("\\")?objectName+"/"+child:objectName+child;
-				uploadFile(bucketName,objectName,childFile);
+				key = key.endsWith("/")?key+child:key+"/"+child;
+				uploadFile(bucketName,key,childFile);
 			}
 		}else {
-			FileExecutor fileExecutor = OSSFactory.getFileExecutor(staticClient, upFile, bucketName, objectName, FileOperation.RESUMABLE_UPLOAD);
-			executor.execute(fileExecutor);
+			FileExecutor fileExecutor = OSSFactory.getFileExecutor(staticClient, upFile, bucketName, key, FileOperation.RESUMABLE_UPLOAD);
+			synchronized(getClass()) {
+				taskList.add(executor.submit(fileExecutor));
+				totalTaskNum ++;
+				logger.info("添加任务,当前任务数{}",totalTaskNum);
+			}
 		}
 	}
 	
@@ -119,7 +216,12 @@ public class OSSService {
 	 */
 	public void downLoadFile(String bucketName,String objectName,File downFile) {
 		FileExecutor fileExecutor = OSSFactory.getFileExecutor(staticClient, downFile, bucketName, objectName, FileOperation.RESUMABLE_DOWNLOAD);
-		executor.execute(fileExecutor);
+		
+		synchronized(getClass()) {
+			taskList.add(executor.submit(fileExecutor));
+			totalTaskNum ++;
+			logger.info("添加任务,当前任务数{}",totalTaskNum);
+		}
 	}
 	
 	/**
@@ -130,16 +232,21 @@ public class OSSService {
 	 */
 	public void batchDownload(String bucketName,String prefix,File dir) {
 		if(!dir.exists()) dir.mkdirs();
-		ObjectListing objectListing = staticClient.listObjects(bucketName, prefix);
+		
+		
+		ListObjectsRequest listRequest = new ListObjectsRequest();
+		listRequest.setBucketName(bucketName);
+		listRequest.setKey(prefix);
+		listRequest.setMaxKeys(1000);
+		
+		ObjectListing objectListing = staticClient.listObjects(listRequest);
+		
 		List<OSSObjectSummary> sums = objectListing.getObjectSummaries();
 		for (OSSObjectSummary s : sums) {
 			String key = s.getKey();
 			File f = new File(dir,key.substring(prefix.length(),key.length()));
 			if(!key.endsWith("/")) {
 				downLoadFile(bucketName,s.getKey(),f);
-			}else {
-				if(!f.exists())
-					f.mkdirs();
 			}
 		}
 	}
@@ -161,7 +268,12 @@ public class OSSService {
 
 		List<OSSObjectSummary> list = new ArrayList<>();
 		
-		ObjectListing listObjects = staticClient.listObjects(bucketName, remotePrefix);
+		ListObjectsRequest listRequest = new ListObjectsRequest();
+		listRequest.setBucketName(bucketName);
+		listRequest.setKey(remotePrefix);
+		listRequest.setMaxKeys(1000);
+		
+		ObjectListing listObjects = staticClient.listObjects(listRequest);
 		List<OSSObjectSummary> objectSummaries = listObjects.getObjectSummaries();
 		for (OSSObjectSummary ossObjectSummary : objectSummaries) {
 			list.add(ossObjectSummary);
@@ -194,7 +306,7 @@ public class OSSService {
 		LinkedList<List<RemoteDir>> dirOuterList = new LinkedList<List<RemoteDir>>();
 		LinkedList<List<RemoteFile>> fileOuterList = new LinkedList<List<RemoteFile>>();
 		
-		Executor executor = Executors.newCachedThreadPool();
+		Executor executorService = Executors.newCachedThreadPool();
 		for (OSSObjectSummary summary : list) {
 			if(flagNum % 10000 ==0) {
 				List<RemoteDir> dirList = new ArrayList<RemoteDir>();
@@ -204,7 +316,7 @@ public class OSSService {
 				
 				//每隔10000次,启用另一个线程把远程文件和文件夹插入数据库中
 				if(flagNum != 0) {
-					executeInsert(dirOuterList, fileOuterList, executor);
+					executeInsert(dirOuterList, fileOuterList, executorService);
 				}
 			}
 			FileAble f = getFile(summary);
@@ -214,11 +326,19 @@ public class OSSService {
 				fileOuterList.getLast().add((RemoteFile)f);
 			}
 			if(flagNum==list.size()-1 && flagNum %10000!=0) {
-				executeInsert(dirOuterList, fileOuterList, executor);
+				executeInsert(dirOuterList, fileOuterList, executorService);
 			}
 			flagNum ++;
 			
 		}
+		
+		executor.shutdown();
+		try {
+			executor.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			throw new RuntimeException(e);
+		}
+		logger.info("插入任务全部完成!");
 	}
 
 	
@@ -276,6 +396,7 @@ public class OSSService {
 			remoteDir.setDirName(key);
 			remoteDir.setHash(summary.getETag());
 			remoteDir.setRank(key.split("/").length);
+			remoteDir.setBucketName(summary.getBucketName());
 			return remoteDir;
 		}else {
 			RemoteFile remoteFile = new RemoteFile();
@@ -287,6 +408,8 @@ public class OSSService {
 			remoteFile.setSize(summary.getSize());
 			remoteFile.setLastModifyTime(summary.getLastModified());
 			remoteFile.setHash(summary.getETag());
+			remoteFile.setDownloadState(0);
+			remoteFile.setBucketName(summary.getBucketName());
 			return remoteFile;
 		}
 	}
@@ -296,5 +419,52 @@ public class OSSService {
 		System.err.println(list);
 		insertRemoteFiles(list);
 	}
+	
+	
+	
+	/*****************	以下为测试方法,都放在最后面 *********************/
+	
+	/**
+	 * 1.getAllSummaries
+	 * 		该方法用于测试大量的文件列表的分页获取方法
+	 *  测试得到的结果为:
+	 *  	list当中有300条数据
+	 *  		通过nextMarker的方式断点得到文件信息,会导致得到的ObjectSummary中有重复的信息
+	 *  		因此,通过转换成TreeSet 来去掉所有重复的信息
+	 */
+	public void getAllSummaryies(String bucketName,String key) {
+
+		List<OSSObjectSummary> list = new ArrayList<>();
+		String nextMarker =  null;
+		ObjectListing listObjects = null;
+		do {
+			
+			ListObjectsRequest listRequest = new ListObjectsRequest();
+			listRequest.setBucketName(bucketName);
+			listRequest.setKey(key);
+			listRequest.setMaxKeys(10);
+			
+			listObjects = staticClient.listObjects(listRequest.withMarker(nextMarker));
+			list.addAll(listObjects.getObjectSummaries());
+			nextMarker = listObjects.getNextMarker();
+		}while(listObjects.isTruncated());
+		
+		Set<OSSObjectSummary> set = new TreeSet<>((OSSObjectSummary o1,OSSObjectSummary o2)->{
+			int len = o1.getKey().length() - o2.getKey().length();
+			if(len==0) {
+				return o1.getKey().compareTo(o2.getKey());
+			}else {
+				return len;
+			}
+		});
+		
+		set.addAll(list);
+		int flag = 0;
+		for (OSSObjectSummary ossObjectSummary : set) {
+			flag++;
+			System.out.println(flag+"-->"+ossObjectSummary.getKey());
+		}
+	}
+	
 	
 }

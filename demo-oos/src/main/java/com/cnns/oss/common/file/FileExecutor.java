@@ -11,6 +11,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,11 +21,12 @@ import com.aliyun.oss.model.DownloadFileResult;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.aliyun.oss.model.UploadFileRequest;
 import com.cnns.oss.common.DownloadListener;
+import com.cnns.oss.common.GlobalCounter;
 import com.cnns.oss.common.ThreadConfig;
 import com.cnns.oss.common.UploadListener;
 import com.cnns.oss.common.enumeration.FileOperation;
 
-public class FileExecutor implements Runnable{
+public class FileExecutor implements Callable<Map<String,Object>>{
 	
 	private static Logger logger = LoggerFactory.getLogger(FileExecutor.class);	//打印日志的logger对象
 	private OSSFileInfo  fileInfo;	//包含文件上传下载基本信息的类
@@ -32,7 +34,7 @@ public class FileExecutor implements Runnable{
 	
 	FileExecutor(){}
 	
-	//只允许本包下的FileExecutorUtils创建本对象,因此,将构造方法设为friendly
+	//只允许本包下的OSSFactory创建本对象,因此,将构造方法设为friendly
 	FileExecutor(OSSFileInfo fileInfo) {
 		if(fileInfo.client==null||fileInfo.localFile==null||fileInfo.destFile==null||fileInfo.operation==null)
 			throw new RuntimeException("信息不足,无法创建FileExecutor对象!");
@@ -40,29 +42,24 @@ public class FileExecutor implements Runnable{
 	}
 	
 	/**
-	 * 需要测试oos是否可以复用,即同一个oos对象,当某个线程正在使用该对象时,另一个线程是否可以继续使用同一个oos对象而不会阻塞,
-	 * 以决定多个本类对象使用同一个OSSClient 还是对每一个线程创建一个不同的 OSSClient
+	 * 由于 OSSClient 对象可以复用,因此,不需要创建多个OSSClient对象,使用静态对象即可
 	 */
 	@Override
-	public void run() {
-		System.err.println("Before:当前线程数:"+Thread.activeCount());
+	public Map<String,Object> call() {
 		switch(fileInfo.operation) {
 			case RESUMABLE_UPLOAD:
-				fileUpload();
-				break;
+				return fileUpload();
 			case RESUMABLE_DOWNLOAD:
-				fileDownLoad();
-				break;
+				return fileDownLoad();
 			default:
 				throw new RuntimeException("未知的上传下载选项,请参见:"+FileOperation.class);
 		}
-		System.err.println("After:当前线程数:"+Thread.activeCount());
 	}
 	
 	/**
 	 * 使用IO流的方式进行文件上传,仅上传单个文件
 	 */
-	private void fileUpload() {
+	private Map<String,Object> fileUpload() {
 		InputStream inputStream = null;
 		try {
 			inputStream = new BufferedInputStream(new FileInputStream(fileInfo.localFile));
@@ -82,6 +79,24 @@ public class FileExecutor implements Runnable{
 			fileInfo.client.uploadFile(uploadReqeust);
 			double interval = (System.currentTimeMillis()-time)/1000.0;
 			logger.info("文件{}上传成功,耗时{}秒,当前时间{}",f.getAbsolutePath(),interval,sdf.format(new Date()));
+
+			ObjectMetadata metaData = fileInfo.client.getObjectMetadata(fileInfo.bucketName,fileInfo.destFile);
+			String eTag = metaData.getETag();
+			
+			
+			Map<String,Object> map = new HashMap<>();
+			map.put("localFile", f.getAbsolutePath());
+			map.put("key", fileInfo.destFile);
+			map.put("bucketName", fileInfo.bucketName);
+			map.put("finishTime", new Date());
+			map.put("hash", eTag);
+			
+			//上传完成后,在返回之前,对全局计数器加1,以调试一个多线程的bug
+			synchronized (this.getClass()) {
+				GlobalCounter.count += 1;
+			}
+			return map;
+			
 		} catch (Throwable e) {
 			throw new RuntimeException(e);
 		}finally {
@@ -98,7 +113,7 @@ public class FileExecutor implements Runnable{
 	/**
 	 * 使用断点续传的方式下载文件的方法,仅下载单个文件
 	 */
-	private void fileDownLoad() {
+	private Map<String,Object> fileDownLoad() {
 		File downFile = fileInfo.localFile;
 		/*
 		 * 如果父路径不存在,则创建父文件夹
@@ -114,16 +129,40 @@ public class FileExecutor implements Runnable{
 		request.setPartSize(ThreadConfig.getPartSize());
 		request.setTaskNum(ThreadConfig.getTaskNum());
 		request.setEnableCheckpoint(true);
-		String downFileStr = downFile.getAbsolutePath();
-		request.setCheckpointFile(downFileStr.substring(0,downFileStr.lastIndexOf("."))+".bak");
+		//String downFileStr = downFile.getAbsolutePath();
+		//request.setCheckpointFile(downFileStr.substring(0,downFileStr.lastIndexOf("."))+".bak");
 		request = request.<DownloadFileRequest>withProgressListener(new DownloadListener());
 		/*
 		 * 下载文件
 		 */
 		logger.info("下载文件开始!");
 		try {
+			
+			//调试用
+			synchronized (this.getClass()) {
+				GlobalCounter.count1 += 1;
+			}
+			
 			DownloadFileResult downloadFile = fileInfo.client.downloadFile(request);
-			ObjectMetadata metadata = downloadFile.getObjectMetadata();
+			
+			//调试用
+			synchronized (this.getClass()) {
+				GlobalCounter.count2 += 1;
+			}
+			
+			
+			Map<String,Object> map = new HashMap<>();
+			map.put("localFile", downFile.getAbsolutePath());
+			map.put("key", fileInfo.destFile);
+			map.put("bucketName", fileInfo.bucketName);
+			map.put("finishTime", new Date());
+			
+			//下载完成后,在返回之前,对全局计数器加1,以调试一个多线程的bug
+			synchronized (this.getClass()) {
+				GlobalCounter.count += 1;
+			}
+			
+			return map;
 		} catch (Throwable e) {
 			throw new RuntimeException("下载文件时出现错误",e);
 		}
