@@ -17,7 +17,7 @@ public class DemoOosApplication {
 	public static void main(String[] args) {
 		//test2
 		SpringApplication.run(DemoOosApplication.class, args);
-		System.out.println("test");
+		System.out.println("随便改点什么");
 	}
 
 }
